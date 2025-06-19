@@ -11,6 +11,8 @@
 #include <memory>
 #include <cstring>
 #include <atomic>
+#include <thread>
+#include <mutex>
 
 extern "C" {
 
@@ -70,8 +72,8 @@ void parkissat_configure(ParkissatSolver* solver, const ParkissatConfig* config)
     int num_solvers = config->num_threads > 0 ? config->num_threads : 1;
     
     for (int i = 0; i < num_solvers; i++) {
-        // Create a solver instance (using GLUCOSE as default)
-        SolverInterface* s = SolverFactory::createGlucoseSolver(i);
+        // Create a solver instance (using KissatBonus as default)
+        SolverInterface* s = SolverFactory::createKissatBonusSolver();
         if (s) {
             solver->solvers.push_back(s);
             
@@ -161,16 +163,62 @@ ParkissatResult parkissat_solve(ParkissatSolver* solver) {
     try {
         solver->interrupted = false;
         
-        // Use the first solver for single-threaded solving
-        SolverInterface* s = solver->solvers[0];
-        
         std::vector<int> empty_cube;
-        SatResult result = s->solve(empty_cube);
+        SatResult result;
+        
+        if (solver->solvers.size() == 1) {
+            // Single-threaded solving
+            SolverInterface* s = solver->solvers[0];
+            result = s->solve(empty_cube);
+            if (result == SAT) {
+                solver->model = s->getModel();
+            }
+        } else {
+            // Multi-threaded solving using threads
+            std::vector<std::thread> threads;
+            std::atomic<bool> solved(false);
+            std::atomic<SatResult> final_result(UNKNOWN);
+            std::mutex model_mutex;
+            
+            for (size_t i = 0; i < solver->solvers.size(); i++) {
+                threads.emplace_back([&, i]() {
+                    if (solved.load()) return;
+                    
+                    SolverInterface* s = solver->solvers[i];
+                    SatResult local_result = s->solve(empty_cube);
+                    
+                    if (local_result == SAT || local_result == UNSAT) {
+                        bool expected = false;
+                        if (solved.compare_exchange_strong(expected, true)) {
+                            // This thread found the result first
+                            final_result.store(local_result);
+                            if (local_result == SAT) {
+                                std::lock_guard<std::mutex> lock(model_mutex);
+                                solver->model = s->getModel();
+                            }
+                            
+                            // Interrupt other solvers
+                            for (auto* other_solver : solver->solvers) {
+                                if (other_solver != s) {
+                                    other_solver->setSolverInterrupt();
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            // Wait for all threads to complete
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            
+            result = final_result.load();
+        }
         
         switch (result) {
             case SAT:
                 solver->last_result = PARKISSAT_SAT;
-                solver->model = s->getModel();
                 break;
             case UNSAT:
                 solver->last_result = PARKISSAT_UNSAT;
@@ -202,13 +250,61 @@ ParkissatResult parkissat_solve_with_assumptions(ParkissatSolver* solver, const 
             cube.assign(assumptions, assumptions + num_assumptions);
         }
         
-        SolverInterface* s = solver->solvers[0];
-        SatResult result = s->solve(cube);
+        SatResult result;
+        
+        if (solver->solvers.size() == 1) {
+            // Single-threaded solving
+            SolverInterface* s = solver->solvers[0];
+            result = s->solve(cube);
+            if (result == SAT) {
+                solver->model = s->getModel();
+            }
+        } else {
+            // Multi-threaded solving using threads
+            std::vector<std::thread> threads;
+            std::atomic<bool> solved(false);
+            std::atomic<SatResult> final_result(UNKNOWN);
+            std::mutex model_mutex;
+            
+            for (size_t i = 0; i < solver->solvers.size(); i++) {
+                threads.emplace_back([&, i]() {
+                    if (solved.load()) return;
+                    
+                    SolverInterface* s = solver->solvers[i];
+                    SatResult local_result = s->solve(cube);
+                    
+                    if (local_result == SAT || local_result == UNSAT) {
+                        bool expected = false;
+                        if (solved.compare_exchange_strong(expected, true)) {
+                            // This thread found the result first
+                            final_result.store(local_result);
+                            if (local_result == SAT) {
+                                std::lock_guard<std::mutex> lock(model_mutex);
+                                solver->model = s->getModel();
+                            }
+                            
+                            // Interrupt other solvers
+                            for (auto* other_solver : solver->solvers) {
+                                if (other_solver != s) {
+                                    other_solver->setSolverInterrupt();
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            // Wait for all threads to complete
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            
+            result = final_result.load();
+        }
         
         switch (result) {
             case SAT:
                 solver->last_result = PARKISSAT_SAT;
-                solver->model = s->getModel();
                 break;
             case UNSAT:
                 solver->last_result = PARKISSAT_UNSAT;
