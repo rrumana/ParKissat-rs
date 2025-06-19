@@ -1,0 +1,25 @@
+[package]
+name = "parkissat-sys"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust bindings for ParKissat-RS SAT solver"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/shaowei-cai-group/ParKissat-RS"
+keywords = ["sat", "solver", "ffi", "parkissat"]
+categories = ["algorithms", "external-ffi-bindings"]
+
+[dependencies]
+libc = "0.2"
+thiserror = "1.0"
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.69"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[features]
+default = []
+# Enable this feature to build ParKissat-RS from source
+build-from-source = []

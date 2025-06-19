@@ -1,0 +1,3 @@
+[submodule "ParKissat-RS"]
+	path = ParKissat-RS
+	url = https://github.com/shaowei-cai-group/ParKissat-RS.git
