@@ -1,7 +1,5 @@
 # parkissat-sys
 
-[![Crates.io](https://img.shields.io/crates/v/parkissat-sys.svg)](https://crates.io/crates/parkissat-sys)
-[![Documentation](https://docs.rs/parkissat-sys/badge.svg)](https://docs.rs/parkissat-sys)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
 Safe Rust bindings for the [ParKissat-RS](https://github.com/shaowei-cai-group/ParKissat-RS) parallel SAT solver, which won the SAT Competition 2022. This crate provides a safe, idiomatic Rust API while maintaining high performance through minimal overhead FFI calls.
@@ -21,11 +19,41 @@ ParKissat-RS is a state-of-the-art parallel SAT solver that combines the efficie
 
 ## Installation
 
-Add this to your `Cargo.toml`:
+Since this crate is not published on crates.io, you need to use it as a Git dependency. Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-parkissat-sys = "0.1"
+parkissat-sys = { git = "https://github.com/rrumana/ParKissat-rs.git" }
+```
+
+Or if you're working locally, clone the repository and use a path dependency:
+
+```bash
+git clone https://github.com/rrumana/ParKissat-rs.git
+cd your-project
+```
+
+Then in your `Cargo.toml`:
+
+```toml
+[dependencies]
+parkissat-sys = { path = "../path/to/parkissat-sys" }
+```
+
+### Building from Source
+
+The crate includes the ParKissat-RS solver as a Git submodule. To build:
+
+```bash
+git clone --recursive https://github.com/rrumana/ParKissat-rs.git
+cd ParKissat-rs/parkissat-sys
+cargo build
+```
+
+If you've already cloned without `--recursive`, initialize the submodules:
+
+```bash
+git submodule update --init --recursive
 ```
 
 ## Quick Start
