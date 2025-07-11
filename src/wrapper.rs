@@ -10,8 +10,8 @@ use std::time::Duration;
 /// Configuration for the ParKissat solver
 #[derive(Debug, Clone)]
 pub struct SolverConfig {
-    /// Number of parallel threads to use (default: 1)
-    pub num_threads: usize,
+    /// Number of parallel threads to use (default: 1, -1 = use all available CPUs)
+    pub num_threads: isize,
     
     /// Timeout in seconds (0 = no timeout)
     pub timeout: Duration,
@@ -118,15 +118,19 @@ impl ParkissatSolver {
             return Err(ParkissatError::SolverCreationFailed);
         }
         
-        // Validate configuration
-        if config.num_threads == 0 {
+        // Resolve thread count: -1 means use all available CPUs
+        let actual_threads = if config.num_threads == -1 {
+            num_cpus::get()
+        } else if config.num_threads <= 0 {
             return Err(ParkissatError::InvalidConfiguration(
-                "Number of threads must be positive".to_string()
+                "Number of threads must be positive or -1 for auto-detection".to_string()
             ));
-        }
+        } else {
+            config.num_threads as usize
+        };
         
         let ffi_config = ffi::ParkissatConfig {
-            num_threads: config.num_threads as c_int,
+            num_threads: actual_threads as c_int,
             timeout_seconds: config.timeout.as_secs() as c_int,
             random_seed: config.random_seed as c_int,
             enable_preprocessing: config.enable_preprocessing,

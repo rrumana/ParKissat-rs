@@ -1,5 +1,6 @@
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
@@ -7,177 +8,142 @@ fn main() {
     
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=wrapper.cpp");
+    println!("cargo:rerun-if-changed=ParKissat-RS");
     
-    // Copy wrapper.h to output directory so stub.cpp can find it
+    // Get the current directory for ParKissat-RS
+    let parkissat_dir = PathBuf::from("ParKissat-RS");
+    let kissat_dir = parkissat_dir.join("kissat_mab");
+    let painless_dir = parkissat_dir.join("painless-src");
+    
+    // Step 1: Build kissat_mab
+    println!("cargo:warning=Building kissat_mab...");
+    
+    // Make configure script executable
+    let configure_path = kissat_dir.join("configure");
+    Command::new("chmod")
+        .args(&["+x", configure_path.to_str().unwrap()])
+        .status()
+        .expect("Failed to make configure executable");
+    
+    // Run configure script
+    let configure_status = Command::new("./configure")
+        .arg("--compact")
+        .current_dir(&kissat_dir)
+        .status()
+        .expect("Failed to run kissat configure");
+    
+    if !configure_status.success() {
+        panic!("kissat configure failed");
+    }
+    
+    // Build kissat
+    let make_status = Command::new("make")
+        .current_dir(&kissat_dir)
+        .status()
+        .expect("Failed to run make for kissat");
+    
+    if !make_status.success() {
+        panic!("kissat make failed");
+    }
+    
+    // Step 2: Build painless-src
+    println!("cargo:warning=Building painless-src...");
+    
+    let painless_make_status = Command::new("make")
+        .current_dir(&painless_dir)
+        .status()
+        .expect("Failed to run make for painless-src");
+    
+    if !painless_make_status.success() {
+        panic!("painless-src make failed");
+    }
+    
+    // Step 3: Copy wrapper.h to output directory
     std::fs::copy("wrapper.h", out_path.join("wrapper.h"))
         .expect("Failed to copy wrapper.h");
     
-    // For now, let's create a simple stub implementation to test the FFI structure
-    // We'll build the actual ParKissat-RS integration later
+    // Step 4: Compile wrapper.cpp with proper includes and linking
+    println!("cargo:warning=Compiling wrapper.cpp...");
     
-    // Create a stub implementation
-    let stub_cpp = r#"
-#include "wrapper.h"
-#include <cstdlib>
-#include <cstring>
-#include <vector>
-#include <map>
-#include <set>
-
-extern "C" {
-
-struct ParkissatSolver {
-    std::vector<std::vector<int>> clauses;
-    std::map<int, bool> model;
-    ParkissatResult last_result;
-    int num_variables;
-    bool configured;
-    
-    ParkissatSolver() : last_result(PARKISSAT_UNKNOWN), num_variables(0), configured(false) {}
-};
-
-ParkissatSolver* parkissat_new(void) {
-    try {
-        return new ParkissatSolver();
-    } catch (...) {
-        return nullptr;
-    }
-}
-
-void parkissat_delete(ParkissatSolver* solver) {
-    if (solver) {
-        delete solver;
-    }
-}
-
-void parkissat_configure(ParkissatSolver* solver, const ParkissatConfig* config) {
-    if (solver && config) {
-        solver->configured = true;
-    }
-}
-
-bool parkissat_load_dimacs(ParkissatSolver* solver, const char* filename) {
-    return solver && filename && solver->configured;
-}
-
-void parkissat_add_clause(ParkissatSolver* solver, const int* literals, int size) {
-    if (!solver || !literals || size <= 0) return;
-    
-    std::vector<int> clause(literals, literals + size);
-    solver->clauses.push_back(clause);
-    
-    // Update variable count
-    for (int lit : clause) {
-        int var = abs(lit);
-        if (var > solver->num_variables) {
-            solver->num_variables = var;
-        }
-    }
-}
-
-void parkissat_set_variable_count(ParkissatSolver* solver, int num_vars) {
-    if (solver && num_vars > 0) {
-        solver->num_variables = num_vars;
-    }
-}
-
-ParkissatResult parkissat_solve(ParkissatSolver* solver) {
-    if (!solver || !solver->configured) {
-        return PARKISSAT_UNKNOWN;
-    }
-    
-    // Simple stub: check for obvious contradictions
-    if (!solver->clauses.empty()) {
-        // Check for unit clauses that contradict each other
-        std::set<int> unit_clauses;
-        for (const auto& clause : solver->clauses) {
-            if (clause.size() == 1) {
-                int lit = clause[0];
-                if (unit_clauses.count(-lit)) {
-                    // Found contradiction: both x and ¬x as unit clauses
-                    solver->last_result = PARKISSAT_UNSAT;
-                    return solver->last_result;
-                }
-                unit_clauses.insert(lit);
-            }
-        }
-        
-        // No obvious contradiction found, assume SAT
-        solver->last_result = PARKISSAT_SAT;
-        
-        // Create a simple model (all variables true)
-        solver->model.clear();
-        for (int i = 1; i <= solver->num_variables; i++) {
-            solver->model[i] = true;
-        }
-    } else {
-        solver->last_result = PARKISSAT_UNSAT;
-    }
-    
-    return solver->last_result;
-}
-
-ParkissatResult parkissat_solve_with_assumptions(ParkissatSolver* solver, const int* assumptions, int num_assumptions) {
-    // For now, just call regular solve
-    return parkissat_solve(solver);
-}
-
-bool parkissat_get_model_value(ParkissatSolver* solver, int variable) {
-    if (!solver || variable <= 0) return false;
-    
-    auto it = solver->model.find(variable);
-    return it != solver->model.end() ? it->second : false;
-}
-
-int parkissat_get_model_size(ParkissatSolver* solver) {
-    return solver ? static_cast<int>(solver->model.size()) : 0;
-}
-
-void parkissat_get_model(ParkissatSolver* solver, int* model, int size) {
-    if (!solver || !model || size <= 0) return;
-    
-    int i = 0;
-    for (const auto& pair : solver->model) {
-        if (i >= size) break;
-        model[i++] = pair.second ? pair.first : -pair.first;
-    }
-}
-
-ParkissatStatistics parkissat_get_statistics(ParkissatSolver* solver) {
-    ParkissatStatistics stats = {0, 0, 0, 0, 0.0};
-    if (solver) {
-        stats.decisions = 1;  // Stub values
-        stats.propagations = 1;
-    }
-    return stats;
-}
-
-void parkissat_interrupt(ParkissatSolver* solver) {
-    // Stub implementation
-}
-
-void parkissat_clear_interrupt(ParkissatSolver* solver) {
-    // Stub implementation
-}
-
-} // extern "C"
-"#;
-
-    // Write the stub to a temporary file
-    let stub_path = PathBuf::from(&out_dir).join("stub.cpp");
-    std::fs::write(&stub_path, stub_cpp).expect("Failed to write stub file");
-    
-    // Build the stub
     let mut build = cc::Build::new();
     build
         .cpp(true)
-        .file(&stub_path)
-        .include(&out_path)  // Add include path for wrapper.h
+        .file("wrapper.cpp")
+        .include(&out_path)  // For wrapper.h
+        .include(&parkissat_dir)  // For ParKissat-RS headers
+        .include(&kissat_dir)  // For kissat headers
+        .include(&painless_dir)  // For painless headers
         .flag("-std=c++17")
-        .flag("-fPIC")
-        .compile("parkissat_stub");
+        .flag("-O3")
+        .flag("-DNDEBUG")
+        .flag("-fopenmp")  // Enable OpenMP
+        .flag("-fPIC");
     
-    // Generate bindings
+    // Add painless-src object files to the build first
+    let painless_objects = [
+        "clauses/ClauseBuffer.o",
+        "clauses/ClauseDatabase.o",
+        "sharing/HordeSatSharing.o",
+        "sharing/Sharer.o",
+        "simplify/parse.o",
+        "simplify/simplify.o",
+        "solvers/KissatBonus.o",
+        "solvers/SolverFactory.o",
+        "utils/Logger.o",
+        "utils/Parameters.o",
+        "utils/SatUtils.o",
+        "utils/System.o",
+        "working/Portfolio.o",
+        "working/SequentialWorker.o",
+    ];
+    
+    for obj in &painless_objects {
+        let obj_path = painless_dir.join(obj);
+        build.object(&obj_path);
+    }
+    
+    // Extract and add all object files from kissat library
+    let kissat_build_dir = kissat_dir.join("build");
+    let kissat_objects = [
+        "allocate.o", "analyze.o", "ands.o", "application.o", "arena.o", "assign.o",
+        "autarky.o", "averages.o", "backtrack.o", "backward.o", "build.o", "bump.o",
+        "ccnr.o", "check.o", "clause.o", "clueue.o", "collect.o", "colors.o",
+        "compact.o", "config.o", "cvec.o", "decide.o", "deduce.o", "dense.o",
+        "dominate.o", "dump.o", "eliminate.o", "equivalences.o", "error.o", "extend.o",
+        "failed.o", "file.o", "flags.o", "format.o", "forward.o", "frames.o",
+        "gates.o", "handle.o", "heap.o", "ifthenelse.o", "import.o", "internal.o",
+        "learn.o", "limits.o", "logging.o", "ls.o", "minimize.o", "mode.o",
+        "options.o", "parse.o", "phases.o", "print.o", "probe.o", "profile.o",
+        "promote.o", "proof.o", "propdense.o", "prophyper.o", "proprobe.o", "propsearch.o",
+        "queue.o", "reduce.o", "reluctant.o", "rephase.o", "report.o", "resize.o",
+        "resolve.o", "resources.o", "restart.o", "search.o", "smooth.o", "sort.o",
+        "stack.o", "statistics.o", "strengthen.o", "substitute.o", "terminate.o",
+        "ternary.o", "trail.o", "transitive.o", "utilities.o", "vector.o", "vivify.o",
+        "walk.o", "watch.o", "weaken.o", "witness.o", "xors.o"
+    ];
+    
+    for obj in &kissat_objects {
+        let obj_path = kissat_build_dir.join(obj);
+        if obj_path.exists() {
+            build.object(&obj_path);
+        }
+    }
+    
+    // Add all the required library paths
+    println!("cargo:rustc-link-search=native={}", kissat_dir.join("build").display());
+    println!("cargo:rustc-link-search=native={}", painless_dir.display());
+    
+    // Link required system libraries
+    println!("cargo:rustc-link-lib=pthread");
+    println!("cargo:rustc-link-lib=z");
+    println!("cargo:rustc-link-lib=m");
+    println!("cargo:rustc-link-lib=gomp");  // OpenMP library
+    println!("cargo:rustc-link-lib=stdc++");  // C++ standard library
+    
+    // Compile the wrapper
+    build.compile("parkissat_wrapper");
+    
+    // Step 5: Generate bindings
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -187,8 +153,9 @@ void parkissat_clear_interrupt(ParkissatSolver* solver) {
         .generate()
         .expect("Unable to generate bindings");
     
-    let out_path = PathBuf::from(out_dir);
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+    
+    println!("cargo:warning=ParKissat-RS build completed successfully");
 }

@@ -1,3 +1,25 @@
+# Rust build artifacts
 /target
+Cargo.lock
 
-/ParKissat-RS
+# Build artifacts in submodules
+ParKissat-RS/kissat_mab/build/
+ParKissat-RS/kissat_mab/makefile
+ParKissat-RS/painless-src/*.o
+ParKissat-RS/painless-src/painless
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

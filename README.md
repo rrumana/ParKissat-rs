@@ -11,7 +11,7 @@ ParKissat-RS is a state-of-the-art parallel SAT solver that combines the efficie
 ## Features
 
 - **Safe Rust API**: Memory-safe bindings with proper error handling
-- **Parallel Solving**: Multi-threaded SAT solving for improved performance
+- **Parallel Solving**: Multi-threaded SAT solving with automatic CPU detection
 - **Configurable**: Extensive configuration options for different use cases
 - **DIMACS Support**: Load problems from standard DIMACS format files
 - **Statistics**: Access to detailed solver statistics
@@ -62,13 +62,20 @@ Here's a simple example of using parkissat-sys to solve a SAT problem:
 
 ```rust
 use parkissat_sys::{ParkissatSolver, SolverConfig, SolverResult};
+use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new solver instance
     let mut solver = ParkissatSolver::new()?;
     
     // Configure the solver
-    let config = SolverConfig::default();
+    let config = SolverConfig {
+        num_threads: -1,  // Auto-detect available CPUs (or use positive number for explicit count)
+        timeout: Duration::from_secs(300),
+        random_seed: 42,
+        enable_preprocessing: true,
+        verbosity: 1,
+    };
     solver.configure(&config)?;
     
     // Add clauses: (x1 ∨ x2) ∧ (¬x1 ∨ x2)
@@ -77,16 +84,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Solve the problem
     match solver.solve()? {
-        SolverResult::Sat => {
+        SolverResult::Sat(assignment) => {
             println!("Formula is satisfiable!");
-            
-            // Get the satisfying assignment
-            let model = solver.get_model()?;
-            println!("Model: {:?}", model);
+            println!("Assignment: {:?}", assignment);
             
             // Check specific variable values
-            println!("x1 = {}", solver.get_model_value(1)?);
-            println!("x2 = {}", solver.get_model_value(2)?);
+            if let Some(&value) = assignment.get(&1) {
+                println!("x1 = {}", value);
+            }
+            if let Some(&value) = assignment.get(&2) {
+                println!("x2 = {}", value);
+            }
         }
         SolverResult::Unsat => {
             println!("Formula is unsatisfiable");
@@ -95,6 +103,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Result unknown (timeout or interrupted)");
         }
     }
+    
+    // Get solver statistics
+    let stats = solver.statistics();
+    println!("Variables: {}, Clauses: {}", stats.variables, stats.clauses);
     
     Ok(())
 }
@@ -105,26 +117,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The solver can be configured with various parameters:
 
 ```rust
-use std::time::Duration;
-use parkissat_sys::SolverConfig;
+use parkissat_sys::SolverOptions;
 
-let config = SolverConfig {
-    num_threads: 4,                           // Use 4 parallel threads
-    timeout: Duration::from_secs(300),        // 5 minute timeout
-    random_seed: 42,                          // Fixed seed for reproducibility
-    enable_preprocessing: true,               // Enable preprocessing
-    verbosity: 1,                            // Moderate verbosity
+let options = SolverOptions {
+    timeout_seconds: Some(300.0),    // 5 minute timeout
+    random_seed: Some(42),           // Fixed seed for reproducibility
+    verbosity: 1,                    // Moderate verbosity (0=quiet, 1=normal, 2=verbose)
 };
+
+// Apply configuration to solver
+solver.configure(&options)?;
+```
+
+## Threading Configuration
+
+The number of threads is specified when creating the solver:
+
+```rust
+// Create solver with different thread counts
+let solver_1t = ParkissatSolver::new(1)?;   // Single-threaded
+let solver_4t = ParkissatSolver::new(4)?;   // 4 threads
+let solver_8t = ParkissatSolver::new(8)?;   // 8 threads
 ```
 
 ## Loading DIMACS Files
 
-You can also load SAT problems from DIMACS format files:
+You can load SAT problems from DIMACS format files:
 
 ```rust
-let mut solver = ParkissatSolver::new()?;
-let config = SolverConfig::default();
-solver.configure(&config)?;
+let mut solver = ParkissatSolver::new(4)?;
+let options = SolverOptions::default();
+solver.configure(&options)?;
 
 // Load problem from DIMACS file
 solver.load_dimacs("problem.cnf")?;
@@ -132,62 +155,61 @@ solver.load_dimacs("problem.cnf")?;
 let result = solver.solve()?;
 ```
 
-## Solving with Assumptions
-
-For incremental solving, you can provide assumptions:
-
-```rust
-// Solve assuming x1 is true and x3 is false
-let assumptions = vec![1, -3];
-let result = solver.solve_with_assumptions(&assumptions)?;
-```
-
 ## Error Handling
 
-The crate provides comprehensive error handling through the [`ParkissatError`](src/error.rs) enum:
+The crate provides comprehensive error handling through the `anyhow::Error` type:
 
 ```rust
-use parkissat_sys::{ParkissatError, Result};
+use anyhow::Result;
 
 match solver.add_clause(&[]) {
     Ok(_) => println!("Clause added successfully"),
-    Err(ParkissatError::InvalidClause(msg)) => {
-        eprintln!("Invalid clause: {}", msg);
-    }
-    Err(e) => eprintln!("Other error: {}", e),
+    Err(e) => eprintln!("Error adding clause: {}", e),
 }
 ```
 
 ## Performance Tips
 
-1. **Use multiple threads**: Set `num_threads` to match your CPU cores for parallel problems
-2. **Enable preprocessing**: Can significantly reduce problem size for some instances
-3. **Batch clause additions**: Add multiple clauses before solving when possible
-4. **Reuse solver instances**: Avoid creating new solvers for related problems
+1. **Use multiple threads**: Specify thread count when creating solver to match your CPU cores
+2. **Batch clause additions**: Add multiple clauses before solving when possible
+3. **Reuse solver instances**: Avoid creating new solvers for related problems
+4. **Set appropriate timeout**: Use `timeout_seconds` to prevent infinite solving
 
 ## API Reference
 
 ### Core Types
 
 - [`ParkissatSolver`](src/wrapper.rs): Main solver interface
-- [`SolverConfig`](src/wrapper.rs): Configuration parameters
+- [`SolverOptions`](src/wrapper.rs): Configuration parameters
 - [`SolverResult`](src/wrapper.rs): Solving results (Sat/Unsat/Unknown)
-- [`ParkissatError`](src/error.rs): Error types
+- [`SolverStatistics`](src/wrapper.rs): Solver performance statistics
 
 ### Key Methods
 
-- `ParkissatSolver::new()` - Create a new solver
-- `configure(&config)` - Configure solver parameters
+- `ParkissatSolver::new(num_threads)` - Create a new solver with specified thread count
+- `configure(&options)` - Configure solver parameters
 - `add_clause(&literals)` - Add a clause to the problem
 - `solve()` - Solve the current problem
-- `get_model()` - Get satisfying assignment (if SAT)
-- `get_statistics()` - Get solver statistics
+- `statistics()` - Get solver statistics
+- `load_dimacs(path)` - Load problem from DIMACS file
 
 ## Requirements
 
 - Rust 1.70 or later
-- C++ compiler (for building the native ParKissat-RS library)
-- CMake (if building from source)
+- C++ compiler with C++17 support (GCC 7+, Clang 5+, or MSVC 2017+)
+- GNU Make (for building ParKissat-RS components)
+- OpenMP support (for parallel execution)
+- zlib development libraries
+- pthread support (on Unix systems)
+
+### Build Dependencies
+
+The build process automatically compiles the following components:
+- **kissat_mab**: The core SAT solver library
+- **painless-src**: The parallel solving framework
+- **wrapper.cpp**: C++ bridge between Rust and ParKissat-RS
+
+All dependencies are built automatically during `cargo build` using the included Makefiles.
 
 ## License
 
